@@ -120,7 +120,7 @@ class App
             $request->dispatch($dispatch);
 
             // 记录路由和请求信息
-            if (self::$debug) {
+            if (true || self::$debug) {
                 Log::record('[ ROUTE ] ' . var_export($dispatch, true), 'info');
                 Log::record('[ HEADER ] ' . var_export($request->header(), true), 'info');
                 Log::record('[ PARAM ] ' . var_export($request->param(), true), 'info');
