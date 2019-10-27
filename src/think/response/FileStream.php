@@ -14,7 +14,7 @@ use think\Response;
 class FileStream extends File
 {
     protected $request = null;
-    protected $chunk_size = 1024 * 1024; // 1M
+    protected $chunk_size = 1024 * 1024 * 1; // 1M
     protected $first_byte = 0;
     protected $last_byte = 0;
     protected $usleep = 0;
@@ -40,47 +40,58 @@ class FileStream extends File
     public function send(): void
     {
         $data = $this->data;
-//        ob_clean();
+
         // 处理文件元信息
-        if (!empty($this->name)) {
-            $name = $this->name;
-        } else {
-            $name = pathinfo($data, PATHINFO_BASENAME);
-        }
         $mimeType = $this->getMimeType($data);
         $size     = filesize($data);
+        $modified = filemtime($data);
+        $stat = stat($data);
+        $md5 = md5($stat['mtime'] .'='. $stat['ino'] .'='. $stat['size']);
+        $etag = '"' . $md5 . '-' . crc32($md5) . '"';
 
-        // 处理分片信息
+
         $path = $this->data;
-        $this->parseRange($size);
 
-        if ($this->last_byte > 0) {
+
+        /*if ($this->last_byte > 0 || $this->first_byte > 0) {
             $last_byte = $this->first_byte + $this->chunk_size;
-            if ($last_byte >= $size) {
+            if ($last_byte >= $size || true) {
                 $last_byte = $size - 1;
             }
         } else {
             $last_byte = $size;
-        }
+        }*/
 
 
-        $length = $last_byte - $this->first_byte + 1;
+//        $length = $last_byte - $this->first_byte + 1;
         // 设置响应头部
         $this->header['Accept-Ranges']             = 'bytes';
         $this->header['Content-Type']              = $mimeType ?: 'application/octet-stream';
-        $this->header['Content-Disposition']       = 'attachment; filename="' . $name . '"';
+        if (!empty($this->name)) {
+            $this->header['Content-Disposition'] = 'attachment; filename="' . $this->name . '"';
+        }
         $this->header['Content-Transfer-Encoding'] = 'binary';
+        $this->header['Last-Modified'] = gmdate('D, d M Y H:i:s', $modified) . ' GMT';
+        $this->header['Expires'] = gmdate("D, d M Y H:i:s", time() + $this->expire) . ' GMT';
+        $this->header['ETag'] = $etag;
 
-        if ($last_byte < $size - 1) {
+        // 处理分片信息
+        if ($this->request->header('range') && false) {
+            $this->parseRange($size);
+            if ($this->last_byte == 0 || $this->last_byte + $this->chunk_size >= $size) {
+                $last_byte = $size - 1;
+            } else {
+                $last_byte = $this->last_byte;
+            }
+            $length = $last_byte - $this->first_byte + 1;
             $this->code = 206;
             $this->header['Content-Length'] = $length;
             $this->header['Content-Range'] = "bytes {$this->first_byte}-{$last_byte}/{$size}"; // % (first_byte, last_byte, size);
+            $this->header['Content-Encoding'] = 'chunked';
         } else {
             $length = $size;
             $this->header['Content-Length']            = $size;
         }
-
-        $this->lastModified(gmdate('D, d M Y H:i:s', time()) . ' GMT');
 
         // 发送头部
         if (!headers_sent() && !empty($this->header)) {
@@ -102,15 +113,15 @@ class FileStream extends File
         try{
             fseek($fp, $offset);
             $remaining = $length;
-
-            while (!feof($fp) && $remaining > 0) {
-                flush();
+            ob_clean();
+            while (!feof($fp) && $remaining > 0 && !connection_aborted()) {
                 $bytes_length = min($chunk_size, $length);
                 $data = fread($fp, $bytes_length);
                 $remaining -= $bytes_length;
+                flush();
                 echo $data;
                 ob_flush();
-                sleep(1);
+//                sleep(1);
                 if ($this->usleep > 0) {
                     usleep($this->usleep);
                 }
@@ -120,9 +131,17 @@ class FileStream extends File
         }
         ob_end_flush();
     }
-    
+
+    /**
+     *  Range: bytes=-128
+     *  Range: bytes=0-
+     *  Range: bytes=28-175,382-399,510-541,644-744,977-980
+     *  Range: bytes=28-175\n380
+     *  RANGE: bytes=1000-9999
+     *  RANGE: bytes 2000-9999
+     */
     protected function parseRange(int $file_size) {
-        $re = '/bytes\s*=?\s*(\d+)\s*-\s*(\d*)/';
+        $re = '/bytes\s*=?\s*(\d*)\s*-\s*(\d*)/i';
         $range_header = $this->request->header('range', '');
         preg_match($re, $range_header, $matchs);
 
