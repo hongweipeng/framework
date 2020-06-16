@@ -93,7 +93,7 @@ class File extends Driver
 
         $content = @file_get_contents($filename);
 
-        if (false !== $content) {
+        if ($content) {
             $expire = (int) substr($content, 8, 12);
             if (0 != $expire && time() - $expire > filemtime($filename)) {
                 //缓存过期删除缓存文件
